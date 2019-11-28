@@ -17,7 +17,6 @@ Up:    push trace up
 Down:  push trace down
 Left:  faster sweep, fewer points
 Right: slower sweep, more points
-
 """
 
 from adafruit_pybadger import PyBadger
@@ -37,7 +36,7 @@ samples1 = array.array('H', [0] * 8000)
 display = board.DISPLAY
 
 # To synchronize the display update to the waveform update,
-# turn off automatic display refresh. 
+# turn off automatic display refresh.
 # Explicit refresh functions update the display.
 # The display refresh feature requires CircuitPython v5.0.0 or later.
 
@@ -125,6 +124,7 @@ board.DISPLAY.refresh(minimum_frames_per_second=0)
 
 # TODO:
 # Would like to have a button interrupt, especially for start/preset()
+# Debounce button method for all buttons
 #
 # Add accelerometer channel
 #
@@ -229,7 +229,7 @@ class micChannel(sensorChannel):
                 board.TX,
                 board.D12,
                 sample_rate=16000,
-                bit_depth=16)        
+                bit_depth=16)
         
     def take_sweep(self):
         """ Take a sweep of sound samples."""
@@ -255,13 +255,45 @@ class lightChannel(sensorChannel):
            
         for a in range(self.num_samples):
             self.samples[a] = int(self.pybadger.light * 1)
-
+            
+class sawtoothChannel(sensorChannel):
+    """ Class to use a generated sawtooth waveform as a data channel. """
+        
+    def __init__(self, board, pybadger, samples):
+        super().__init__(pybadger)
+        self.samples = samples
+        self.board = board
+        self.pybadger = pybadger
+        self.vert_peak = 1000
+        self.vert_start = 32768 - self.vert_peak
+        self.vert_stop = 32768 + self.vert_peak
+        self.vert_incr = 25
+        self.vert = self.vert_start
+        
+    def preset(self):
+        
+        super().preset()
+        self.vertical_gain = 5
+        self.vertical_offset = 68
+        
+    def take_sweep(self):
+        """ Generate a sawtooth waveform with math, no measurement."""
+        
+        for idx in range(self.num_samples):
+            self.samples[idx] = self.vert
+            if self.vert + self.vert_incr > self.vert_stop:
+                self.vert = self.vert_start
+            else:
+                self.vert += self.vert_incr  
         
 mic_channel = micChannel(board, pybadger, samples1)
 mic_channel.preset()
 
 light_channel = lightChannel(board, pybadger, samples1)
 light_channel.preset()
+
+sawtooth_channel = sawtoothChannel(board, pybadger, samples1)
+sawtooth_channel.preset()
 
 pale_green = [0,1,0]
 pale_blue = [0,0,1]
@@ -282,21 +314,25 @@ while(True):
     channel.buttons()
     
     if pybadger.button.select:
-        vertical_input = 1 - vertical_input
+        vertical_input += 1
+        if vertical_input > 2:
+            vertical_input = 0
         while pybadger.button.select:
             time.sleep(0.05)
-        time.sleep(0.05)    
+        time.sleep(0.05)
         if vertical_input == 0:
             channel = mic_channel
-        else:
+        elif vertical_input == 1:
             channel = light_channel
+        else:
+            channel = sawtooth_channel
         
     # Turn the sweep LED on while taking samples
     pybadger.pixels[sweep_led] = pale_green
     channel.take_sweep()
     pybadger.pixels[sweep_led] = black
             
-    # Draw the waveform to pixels on the display.
+    # Draw the waveform to pixels on the display. 
     draw_trace(1, channel)
     
     # Refresh the display
@@ -307,11 +343,11 @@ while(True):
     # The second refresh is still needed!
     if run_slow:
         time.sleep(0.1)
-    board.DISPLAY.refresh(minimum_frames_per_second=0)
+    # board.DISPLAY.refresh(minimum_frames_per_second=0)
     # When run_slow is True, a third refresh is needed!
     # It looks like there needs to be two refreshes in
     # quick succession.
-    # board.DISPLAY.refresh(minimum_frames_per_second=0)
+    board.DISPLAY.refresh(minimum_frames_per_second=0)
     
     pybadger.pixels[refresh_led] = black
     # End of refresh

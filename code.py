@@ -31,15 +31,6 @@ import board
 pybadger = PyBadger()
 pybadger.auto_dim_display(delay=30)
 
-run_slow = False
-
-mic = audiobusio.PDMIn(
-    board.TX,
-    board.D12,
-    sample_rate=16000,
-    bit_depth=16
-    )
-
 # Record up to 0.5 seconds of audio
 samples1 = array.array('H', [0] * 8000)
 
@@ -101,6 +92,8 @@ def draw_trace(color_idx, channel):
           - x_right
           - y_bottom
           - y_top
+          
+       Channel settings:   
         Display:
           - num_samples_per_px
           - adc_midscale
@@ -109,14 +102,12 @@ def draw_trace(color_idx, channel):
         Sampling:
           - start_sample
           - num_samples
-          
-        TODO: 
     """
     x = x_left
     horizontal_counter = channel.num_samples_per_px
     sample_index = channel.start_sample
     while (x < x_right) and (sample_index < channel.num_samples):
-        y = channel.vertical_offset - ((samples1[sample_index] - 
+        y = channel.vertical_offset - ((channel.samples[sample_index] - 
                 channel.adc_midscale) >> channel.vertical_gain)
         if y > y_bottom:
             y = y_bottom
@@ -133,18 +124,14 @@ def draw_trace(color_idx, channel):
 board.DISPLAY.refresh(minimum_frames_per_second=0)
 
 # TODO:
-# Need to make an object and save the state for different
-# sensors, so that switching between them doesn't lose
-# their settings.
+# Would like to have a button interrupt, especially for start/preset()
 #
 # Add accelerometer channel
 #
 
-# First state initialization
-vertical_input = 0
-
-class micChannel(object):
-    def __init__(self):
+class sensorChannel(object):
+    def __init__(self, pybadger):
+        self.pybadger = pybadger
         
         self.vertical_offset = 64
         self.num_samples_per_px = 2
@@ -170,8 +157,6 @@ class micChannel(object):
         self.max_num_samples = 8000
         
     def preset(self):
-        global vertical_input
-        vertical_input = 0
         self.vertical_offset = 64
         self.num_samples_per_px = 2
         self.vertical_gain = 5
@@ -216,28 +201,67 @@ class micChannel(object):
         else:
             self.num_samples = self.max_num_samples
 
-def check_buttons(pybadger, channel):
-    global vertical_input
-    if pybadger.button.a:
-        ch1.increase_gain()
-    if pybadger.button.b:
-        ch1.decrease_gain()
-    if pybadger.button.down:
-        ch1.increase_offset()
-    if pybadger.button.up:
-        ch1.decrease_offset()
-    if pybadger.button.left:
-        ch1.increase_samples()        
-    if pybadger.button.right:
-        ch1.decrease_samples()
-    if pybadger.button.select:
-        vertical_input = 1 - vertical_input
-        while pybadger.button.select:
-            time.sleep(0.05)
-    if pybadger.button.start:
-        ch1.preset()    
+    def buttons(self):
+        if self.pybadger.button.a:
+            self.increase_gain()
+        if self.pybadger.button.b:
+            self.decrease_gain()
+        if self.pybadger.button.down:
+            self.increase_offset()
+        if self.pybadger.button.up:
+            self.decrease_offset()
+        if self.pybadger.button.left:
+            self.increase_samples()        
+        if self.pybadger.button.right:
+            self.decrease_samples()
 
-ch1 = micChannel()
+        if self.pybadger.button.start:
+            self.preset()  
+            
+class micChannel(sensorChannel):
+    """ Class to use the light sensor as a data channel. """
+    
+    def __init__(self, board, pybadger, samples):
+        super().__init__(pybadger)
+        self.samples = samples
+        self.board = board
+        self.mic = audiobusio.PDMIn(
+                board.TX,
+                board.D12,
+                sample_rate=16000,
+                bit_depth=16)        
+        
+    def take_sweep(self):
+        """ Take a sweep of sound samples."""
+        
+        self.mic.record(self.samples, self.num_samples)
+        
+class lightChannel(sensorChannel):
+    """ Class to use the light sensor as a data channel. """
+        
+    def __init__(self, board, pybadger, samples):
+        super().__init__(pybadger)
+        self.samples = samples
+        self.board = board
+        self.pybadger = pybadger
+        
+    def preset(self):
+        super().preset()
+        self.vertical_gain = 8
+        self.vertical_offset = 0
+        
+    def take_sweep(self):
+        """ Take a sweep of light samples."""
+           
+        for a in range(self.num_samples):
+            self.samples[a] = int(self.pybadger.light * 1)
+
+        
+mic_channel = micChannel(board, pybadger, samples1)
+mic_channel.preset()
+
+light_channel = lightChannel(board, pybadger, samples1)
+light_channel.preset()
 
 pale_green = [0,1,0]
 pale_blue = [0,0,1]
@@ -247,30 +271,50 @@ refresh_led = 4
 
 board.DISPLAY.refresh(minimum_frames_per_second=0)
 
-while(True):
+channel = mic_channel
+vertical_input = 0
 
-    # Take the samples
-    pybadger.pixels[sweep_led] = pale_green
-    if vertical_input == 0: 
-        mic.record(samples1, ch1.num_samples)
-    else:
-        for a in range(ch1.num_samples):
-            samples1[a] = int(pybadger.light * 1)    
-    pybadger.pixels[sweep_led] = black
+run_slow = False
+
+while(True):
     
-    # Check the buttons
-    check_buttons(pybadger, ch1)
+    # Check the buttons for the channel
+    channel.buttons()
+    
+    if pybadger.button.select:
+        vertical_input = 1 - vertical_input
+        while pybadger.button.select:
+            time.sleep(0.05)
+        time.sleep(0.05)    
+        if vertical_input == 0:
+            channel = mic_channel
+        else:
+            channel = light_channel
+        
+    # Turn the sweep LED on while taking samples
+    pybadger.pixels[sweep_led] = pale_green
+    channel.take_sweep()
+    pybadger.pixels[sweep_led] = black
             
-    # Draw the waveform by scaling the recorded values to
-    # pixels on the display.
-    draw_trace(1, ch1)
-    pybadger.pixels[refresh_led] = pale_blue    
+    # Draw the waveform to pixels on the display.
+    draw_trace(1, channel)
+    
+    # Refresh the display
+    # Light the refresh LED only while refresh is happening
+    pybadger.pixels[refresh_led] = pale_blue
+    
     board.DISPLAY.refresh(minimum_frames_per_second=0)
-    # The second retrace is still needed!
+    # The second refresh is still needed!
     if run_slow:
-        time.sleep(0.1)    
+        time.sleep(0.1)
     board.DISPLAY.refresh(minimum_frames_per_second=0)
+    # When run_slow is True, a third refresh is needed!
+    # It looks like there needs to be two refreshes in
+    # quick succession.
+    # board.DISPLAY.refresh(minimum_frames_per_second=0)
+    
     pybadger.pixels[refresh_led] = black
+    # End of refresh
 
     # Erase the waveform by redrawing the pixels with black.
-    draw_trace(0, ch1)
+    draw_trace(0, channel)

@@ -47,8 +47,8 @@ samples1 = array.array('H', [0] * 8000)
 display = board.DISPLAY
 
 # To synchronize the display update to the waveform update,
-# turn off automatic display refresh. Explicit refresh
-# functions update the display.
+# turn off automatic display refresh. 
+# Explicit refresh functions update the display.
 # The display refresh feature requires CircuitPython v5.0.0 or later.
 
 board.DISPLAY.auto_refresh = False
@@ -79,11 +79,11 @@ display.show(group)
 #   Positive y is down
 #   Positive x is right
 
-vertical_offset = 64
 # This sets trace to near bottom of screen when gain is low
 # vertical_offset = 120
 adc_midscale = 32768
 start_sample = 3
+max_samples = 4000
 
 # Define the bounds of the graph
 x_left = 10 - start_sample
@@ -99,11 +99,7 @@ for py in range(y_top-1, y_bottom+1):
     bitmap[x_left-1, py] = 2
     bitmap[x_right+1, py] = 2
 
-num_samples_per_px = 2
-num_samples = (1 + num_samples_per_px) * (x_right - x_left + start_sample + 1)
-vertical_gain = 5
-
-def draw_trace(color_idx):
+def draw_trace(color_idx, channel):
     """Draw a trace on the screen"""
 
     """Globals:
@@ -120,12 +116,14 @@ def draw_trace(color_idx):
         Sampling:
           - start_sample
           - num_samples
+          
+        TODO: 
     """
     x = x_left
-    horizontal_counter = num_samples_per_px
+    horizontal_counter = channel.num_samples_per_px
     sample_index = start_sample
-    while (x < x_right) and (sample_index < num_samples):
-        y = vertical_offset - ((samples1[sample_index] - adc_midscale) >> vertical_gain)
+    while (x < x_right) and (sample_index < channel.num_samples):
+        y = channel.vertical_offset - ((samples1[sample_index] - adc_midscale) >> channel.vertical_gain)
         if y > y_bottom:
             y = y_bottom
         elif y < y_top:
@@ -133,49 +131,155 @@ def draw_trace(color_idx):
         bitmap[x, y] = color_idx
         if horizontal_counter == 0:
             x += 1
-            horizontal_counter = num_samples_per_px
+            horizontal_counter = channel.num_samples_per_px
         else:
             horizontal_counter -= 1
         sample_index += 1
+        
+board.DISPLAY.refresh(minimum_frames_per_second=0)
+
+# TODO:
+# Need to make an object and save the state for different
+# sensors, so that switching between them doesn't lose
+# their settings.
+
+# There needs to be a way for controls to respond more
+# quickly when sample times are long.
+# There needs to be a way to do screen updates during
+# long sample times.
+#
+# Add G sensor
+#
+# First state initialization
+
+vertical_input = 0
+
+class micChannel(object):
+    def __init__(self):
+        
+        self.vertical_offset = 64
+        self.num_samples_per_px = 2
+        self.num_samples = 1000
+        self.vertical_gain = 5
+        self.vertical_input = 0
+        
+        self.max_gain_limit = 12
+        self.min_gain_limit = 0
+        self.gain_increment = 1
+        
+        self.max_vertical_offset_limit = 1000
+        self.min_vertical_offset_limit = -1000
+        self.vertical_offset_increment = 4
+        
+        self.max_samples_per_px = 39
+        self.min_samples_per_px = 1
+        self.samples_per_px_increment = 1
+        
+        self.min_num_samples = 100
+        self.max_num_samples = 8000
+        
+    def preset(self):
+        global vertical_input
+        vertical_input = 0
+        self.vertical_offset = 64
+        self.num_samples_per_px = 2
+        self.vertical_gain = 5
+        self.vertical_input = 0
+        self.calc_num_samples()
+        
+    def increase_gain(self):
+        if self.vertical_gain < self.max_gain_limit:
+            self.vertical_gain += self.gain_increment
+            
+    def decrease_gain(self):
+        if self.vertical_gain > self.min_gain_limit:
+            self.vertical_gain -= self.gain_increment
+            
+    def increase_offset(self):
+        if (self.vertical_offset <= self.max_vertical_offset_limit +
+                                    self.vertical_offset_increment):
+            self.vertical_offset += self.vertical_offset_increment
+            
+    def decrease_offset(self):
+        if (self.vertical_offset >= self.min_vertical_offset_limit -
+                                    self.vertical_offset_increment):
+            self.vertical_offset -= self.vertical_offset_increment
+            
+    def increase_samples(self):
+        if self.num_samples_per_px > self.min_samples_per_px:
+            self.num_samples_per_px -= self.samples_per_px_increment
+            self.calc_num_samples()
+
+    def decrease_samples(self):
+        if self.num_samples_per_px < self.max_samples_per_px:
+            self.num_samples_per_px += self.samples_per_px_increment
+            self.calc_num_samples()
+            
+    def calc_num_samples(self):
+        nsamp = (1 + self.num_samples_per_px) * (x_right - x_left + start_sample + 1)
+        if nsamp <= self.max_num_samples:
+            self.num_samples = nsamp
+        elif nsamp >= self.min_num_samples:
+            self.num_samples = nsamp
+        else:
+            self.num_samples = self.max_num_samples
+
+def check_buttons(pybadger, channel):
+    global vertical_input
+    if pybadger.button.a:
+        ch1.increase_gain()
+    if pybadger.button.b:
+        ch1.decrease_gain()
+    if pybadger.button.down:
+        ch1.increase_offset()
+    if pybadger.button.up:
+        ch1.decrease_offset()
+    if pybadger.button.left:
+        ch1.increase_samples()        
+    if pybadger.button.right:
+        ch1.decrease_samples()
+    if pybadger.button.select:
+        vertical_input = 1 - vertical_input
+        while pybadger.button.select:
+            time.sleep(0.05)
+    if pybadger.button.start:
+        ch1.preset()    
+
+ch1 = micChannel()
+
+pale_green = [0,1,0]
+pale_blue = [0,0,1]
+black = [0,0,0]
+sweep_led = 0
+refresh_led = 4
+
+board.DISPLAY.refresh(minimum_frames_per_second=0)
 
 while(True):
 
     # Take the samples
-    mic.record(samples1, num_samples)
+    pybadger.pixels[sweep_led] = pale_green
+    if vertical_input == 0: 
+        mic.record(samples1, ch1.num_samples)
+    else:
+        for a in range(ch1.num_samples):
+            samples1[a] = int(pybadger.light * 1)    
+    pybadger.pixels[sweep_led] = black
     
     # Check the buttons
-    if pybadger.button.a:
-        if vertical_gain < 12:
-            vertical_gain += 1
-    if pybadger.button.b:
-        if vertical_gain > 0:
-            vertical_gain -= 1
-    if pybadger.button.down:
-        if vertical_offset < 1000:
-            vertical_offset += 4
-    if pybadger.button.up:
-        if vertical_offset > -1000:
-            vertical_offset -= 4
-    if pybadger.button.left:
-        if num_samples_per_px > 1:
-            num_samples_per_px -= 1
-            num_samples = (1 + num_samples_per_px) * (x_right - x_left + start_sample + 1)
-    if pybadger.button.right:
-        if num_samples_per_px < 40:
-            num_samples_per_px += 1
-            num_samples = (1 + num_samples_per_px) * (x_right - x_left + start_sample + 1)
+    check_buttons(pybadger, ch1)
             
     # Draw the waveform by scaling the recorded values to
     # pixels on the display.
-    draw_trace(1)
-
+    draw_trace(1, ch1)
+    pybadger.pixels[refresh_led] = pale_blue    
     board.DISPLAY.refresh(minimum_frames_per_second=0)
-    # Don't know why this second refresh is required.
-    # Looks like a bug!
+    # The second retrace is still needed!
     board.DISPLAY.refresh(minimum_frames_per_second=0)
+    pybadger.pixels[refresh_led] = black
 
     # Erase the waveform by redrawing the pixels with black.
-    draw_trace(0)
+    draw_trace(0, ch1)
 
     if run_slow:
         time.sleep(0.1)

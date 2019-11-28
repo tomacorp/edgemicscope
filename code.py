@@ -31,7 +31,6 @@ import board
 pybadger = PyBadger()
 pybadger.auto_dim_display(delay=30)
 
-first_display = True
 run_slow = False
 
 mic = audiobusio.PDMIn(
@@ -53,7 +52,7 @@ display = board.DISPLAY
 
 board.DISPLAY.auto_refresh = False
  
-# Create a bitmap with two colors
+# Create a bitmap with colors
 ncolors = 3
 bitmap = displayio.Bitmap(display.width, display.height, ncolors)
  
@@ -79,14 +78,8 @@ display.show(group)
 #   Positive y is down
 #   Positive x is right
 
-# This sets trace to near bottom of screen when gain is low
-# vertical_offset = 120
-adc_midscale = 32768
-start_sample = 3
-max_samples = 4000
-
 # Define the bounds of the graph
-x_left = 10 - start_sample
+x_left = 10
 x_right = 140
 y_bottom = 120
 y_top = 20
@@ -121,9 +114,10 @@ def draw_trace(color_idx, channel):
     """
     x = x_left
     horizontal_counter = channel.num_samples_per_px
-    sample_index = start_sample
+    sample_index = channel.start_sample
     while (x < x_right) and (sample_index < channel.num_samples):
-        y = channel.vertical_offset - ((samples1[sample_index] - adc_midscale) >> channel.vertical_gain)
+        y = channel.vertical_offset - ((samples1[sample_index] - 
+                channel.adc_midscale) >> channel.vertical_gain)
         if y > y_bottom:
             y = y_bottom
         elif y < y_top:
@@ -142,16 +136,11 @@ board.DISPLAY.refresh(minimum_frames_per_second=0)
 # Need to make an object and save the state for different
 # sensors, so that switching between them doesn't lose
 # their settings.
+#
+# Add accelerometer channel
+#
 
-# There needs to be a way for controls to respond more
-# quickly when sample times are long.
-# There needs to be a way to do screen updates during
-# long sample times.
-#
-# Add G sensor
-#
 # First state initialization
-
 vertical_input = 0
 
 class micChannel(object):
@@ -162,6 +151,8 @@ class micChannel(object):
         self.num_samples = 1000
         self.vertical_gain = 5
         self.vertical_input = 0
+        self.start_sample = 3
+        self.adc_midscale = 32768
         
         self.max_gain_limit = 12
         self.min_gain_limit = 0
@@ -216,7 +207,8 @@ class micChannel(object):
             self.calc_num_samples()
             
     def calc_num_samples(self):
-        nsamp = (1 + self.num_samples_per_px) * (x_right - x_left + start_sample + 1)
+        nsamp = (1 + self.num_samples_per_px) * (x_right - x_left + 1) \
+                + self.start_sample
         if nsamp <= self.max_num_samples:
             self.num_samples = nsamp
         elif nsamp >= self.min_num_samples:
@@ -275,11 +267,10 @@ while(True):
     pybadger.pixels[refresh_led] = pale_blue    
     board.DISPLAY.refresh(minimum_frames_per_second=0)
     # The second retrace is still needed!
+    if run_slow:
+        time.sleep(0.1)    
     board.DISPLAY.refresh(minimum_frames_per_second=0)
     pybadger.pixels[refresh_led] = black
 
     # Erase the waveform by redrawing the pixels with black.
     draw_trace(0, ch1)
-
-    if run_slow:
-        time.sleep(0.1)

@@ -332,25 +332,15 @@ while(True):
     channel.take_sweep()
     pybadger.pixels[sweep_led] = black
             
-    # Draw the waveform to pixels on the display. 
+    # Draw the waveform to pixels on the display.
+    # During the display update, light the refresh LED.
+    pybadger.pixels[refresh_led] = pale_blue
     draw_trace(1, channel)
     
     # Refresh the display
-    # Light the refresh LED only while refresh is happening
-    pybadger.pixels[refresh_led] = pale_blue
-    
-    board.DISPLAY.refresh(minimum_frames_per_second=0)
-    # The second refresh is still needed!
-    if run_slow:
-        time.sleep(0.1)
-    # board.DISPLAY.refresh(minimum_frames_per_second=0)
-    # When run_slow is True, a third refresh is needed!
-    # It looks like there needs to be two refreshes in
-    # quick succession.
-    board.DISPLAY.refresh(minimum_frames_per_second=0)
-    
-    pybadger.pixels[refresh_led] = black
-    # End of refresh
+    while not board.DISPLAY.refresh(minimum_frames_per_second=0):
+        time.sleep(0.001)
 
     # Erase the waveform by redrawing the pixels with black.
     draw_trace(0, channel)
+    pybadger.pixels[refresh_led] = black

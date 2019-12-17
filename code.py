@@ -17,18 +17,111 @@ Up:    push trace up
 Down:  push trace down
 Left:  faster sweep, fewer points
 Right: slower sweep, more points
+
+https://www.adafruitdaily.com/2019/11/19/a-supercon-was-had-arm-aiot-dev-summit-is-almost-here-and-more-python-adafruit-circuitpython-pythonhardware-circuitpython-micropython-thepsf-adafruit/
+
 """
 
-from adafruit_pybadger import PyBadger
+from adafruit_debouncer import Debouncer
 import array
 import math
 import time
 import audiobusio
 import displayio
 import board
+import analogio
+
+from collections import namedtuple
+from micropython import const
+import digitalio
+import audioio
+from gamepadshift import GamePadShift
+import neopixel
+from adafruit_display_shapes.rect import Rect
+from adafruit_display_text.label import Label
+import terminalio
+import adafruit_lis3dh
+
+Buttons = namedtuple("Buttons", "b a start select right down up left")
+
+# pylint: disable=too-many-instance-attributes
+class PyBadger:
+    """PyBadger class."""
+    # Button Constants
+    BUTTON_LEFT = const(128)
+    BUTTON_UP = const(64)
+    BUTTON_DOWN = const(32)
+    BUTTON_RIGHT = const(16)
+    BUTTON_SELECT = const(8)
+    BUTTON_START = const(4)
+    BUTTON_A = const(2)
+    BUTTON_B = const(1)
+
+    def __init__(self, i2c=None):
+        # Accelerometer
+        if i2c is None:
+            try:
+                i2c = board.I2C()
+            except RuntimeError:
+                self._accelerometer = None
+
+        if i2c is not None:
+            int1 = digitalio.DigitalInOut(board.ACCELEROMETER_INTERRUPT)
+            try:
+                self._accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, address=0x19, int1=int1)
+            except ValueError:
+                self._accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)
+
+        # Buttons
+        self._buttons = GamePadShift(digitalio.DigitalInOut(board.BUTTON_CLOCK),
+                                     digitalio.DigitalInOut(board.BUTTON_OUT),
+                                     digitalio.DigitalInOut(board.BUTTON_LATCH))
+
+        # Display
+        self.display = board.DISPLAY
+
+        # Light sensor
+        self._light_sensor = analogio.AnalogIn(board.A7)
+
+        # NeoPixels
+        # Count is hardcoded - should be based on board ID, currently no board info for PyBadge LC
+        neopixel_count = 5
+        self._neopixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
+                                            pixel_order=neopixel.GRB)
+
+    @property
+    def pixels(self):
+        """Sequence like object representing the NeoPixels on the board."""
+        return self._neopixels
+
+    @property
+    def button(self):
+        button_values = self._buttons.get_pressed()
+        return Buttons(*[button_values & button for button in
+                         (PyBadger.BUTTON_B, PyBadger.BUTTON_A, PyBadger.BUTTON_START,
+                          PyBadger.BUTTON_SELECT, PyBadger.BUTTON_RIGHT,
+                          PyBadger.BUTTON_DOWN, PyBadger.BUTTON_UP, PyBadger.BUTTON_LEFT)])
+
+    @property
+    def light(self):
+        """Light sensor data."""
+        return self._light_sensor.value
+
+    @property
+    def acceleration(self):
+        """Accelerometer data."""
+        return self._accelerometer.acceleration if self._accelerometer is not None else None
+
+    @property
+    def brightness(self):
+        """Display brightness."""
+        return self.display.brightness
+
+    @brightness.setter
+    def brightness(self, value):
+        self.display.brightness = value
 
 pybadger = PyBadger()
-pybadger.auto_dim_display(delay=30)
 
 # Record up to 0.5 seconds of audio
 samples1 = array.array('H', [0] * 8000)
@@ -162,7 +255,8 @@ class sensorChannel(object):
         self.vertical_gain = 5
         self.vertical_input = 0
         self.calc_num_samples()
-        
+     
+    @property
     def increase_gain(self):
         if self.vertical_gain < self.max_gain_limit:
             self.vertical_gain += self.gain_increment
@@ -202,8 +296,9 @@ class sensorChannel(object):
             self.num_samples = self.max_num_samples
 
     def buttons(self):
+        
         if self.pybadger.button.a:
-            self.increase_gain()
+            self.increase_gain
         if self.pybadger.button.b:
             self.decrease_gain()
         if self.pybadger.button.down:
@@ -249,13 +344,15 @@ class lightChannel(sensorChannel):
         super().preset()
         self.vertical_gain = 8
         self.vertical_offset = 0
+        # self._light_sensor = analogio.AnalogIn(board.A7)
         
     def take_sweep(self):
         """ Take a sweep of light samples."""
            
         for a in range(self.num_samples):
             self.samples[a] = int(self.pybadger.light * 1)
-            
+            # self.samples[a] = int(self._light_sensor.value)
+                
 class sawtoothChannel(sensorChannel):
     """ Class to use a generated sawtooth waveform as a data channel. """
         
@@ -303,23 +400,33 @@ refresh_led = 4
 
 board.DISPLAY.refresh(minimum_frames_per_second=0)
 
-channel = mic_channel
-vertical_input = 0
+channel = light_channel
+vertical_input = 1
 
 run_slow = False
+
+def debounce(btn):
+    pressed = False
+    if pybadger.button[btn]:
+        pressed = True
+        pybadger.pixels[2] = pale_green
+        while pybadger.button[btn]:
+            pybadger.pixels[2] = pale_blue
+            time.sleep(0.05)
+    else:
+        pybadger.pixels[2] = black  
+    return pressed
 
 while(True):
     
     # Check the buttons for the channel
     channel.buttons()
     
-    if pybadger.button.select:
+    if debounce(3):
         vertical_input += 1
         if vertical_input > 2:
-            vertical_input = 0
-        while pybadger.button.select:
-            time.sleep(0.05)
-        time.sleep(0.05)
+            vertical_input = 0  
+        
         if vertical_input == 0:
             channel = mic_channel
         elif vertical_input == 1:
@@ -337,10 +444,10 @@ while(True):
     pybadger.pixels[refresh_led] = pale_blue
     draw_trace(1, channel)
     
-    # Refresh the display
+    # Refresh the display. Repeat the call until it completes.
     while not board.DISPLAY.refresh(minimum_frames_per_second=0):
-        time.sleep(0.001)
-
+        pass
+        
     # Erase the waveform by redrawing the pixels with black.
     draw_trace(0, channel)
     pybadger.pixels[refresh_led] = black

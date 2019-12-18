@@ -39,6 +39,7 @@ from gamepadshift import GamePadShift
 import neopixel
 from adafruit_display_shapes.rect import Rect
 from adafruit_display_text.label import Label
+from adafruit_bitmap_font import bitmap_font
 import terminalio
 import adafruit_lis3dh
 
@@ -153,6 +154,10 @@ group = displayio.Group()
  
 # Add the TileGrid to the Group
 group.append(tile_grid)
+
+message_text = 'hello'
+BACKGROUND_TEXT_COLOR = 0xFFFFFF
+BG_COLOR2 = 0xFF00FF
  
 # Add the Group to the Display
 display.show(group)
@@ -166,6 +171,9 @@ x_left = 10
 x_right = 140
 y_bottom = 120
 y_top = 20
+
+# Define the bounds of the annotation
+y_annot_top = 5
 
 # Draw a frame around the graph
 for px in range(x_left-1, x_right+1):
@@ -230,7 +238,6 @@ class sensorChannel(object):
         self.num_samples_per_px = 2
         self.num_samples = 1000
         self.vertical_gain = 5
-        self.vertical_input = 0
         self.start_sample = 3
         self.adc_midscale = 32768
         
@@ -253,10 +260,8 @@ class sensorChannel(object):
         self.vertical_offset = 64
         self.num_samples_per_px = 2
         self.vertical_gain = 5
-        self.vertical_input = 0
         self.calc_num_samples()
      
-    @property
     def increase_gain(self):
         if self.vertical_gain < self.max_gain_limit:
             self.vertical_gain += self.gain_increment
@@ -298,7 +303,7 @@ class sensorChannel(object):
     def buttons(self):
         
         if self.pybadger.button.a:
-            self.increase_gain
+            self.increase_gain()
         if self.pybadger.button.b:
             self.decrease_gain()
         if self.pybadger.button.down:
@@ -381,7 +386,36 @@ class sawtoothChannel(sensorChannel):
             if self.vert + self.vert_incr > self.vert_stop:
                 self.vert = self.vert_start
             else:
-                self.vert += self.vert_incr  
+                self.vert += self.vert_incr
+
+class accelerometerChannel(sensorChannel):
+    """ Class to use the accelerometer as a data channel. """
+    
+    def __init__(self, board, pybadger, samples):
+        super().__init__(pybadger)
+        self.samples = samples
+        self.board = board
+        self.pybadger = pybadger
+        
+    def preset(self):
+        super().preset()
+        
+    def take_sweep(self):
+        """ Take a sweep of accelerometer measurements."""
+        
+        """ Question: what is best lightweight algorithm to make a swept graph of acceleration interesting? """
+        
+        # Scale the readings to look like ADC readings.
+
+        for a in range(0, self.num_samples, 2):
+            accel_reading = self.pybadger.acceleration
+            accel = int(round(accel_reading.x + accel_reading.y + accel_reading.z) * 25.0) + 32768
+            self.samples[a] = accel
+            
+        # The accelerometer is slow, so interpolate between readings to make it sweep faster.
+        for a in range(1, self.num_samples, 2):
+            self.samples[a] = (self.samples[a-1] + self.samples[a+1]) >> 1
+
         
 mic_channel = micChannel(board, pybadger, samples1)
 mic_channel.preset()
@@ -391,6 +425,10 @@ light_channel.preset()
 
 sawtooth_channel = sawtoothChannel(board, pybadger, samples1)
 sawtooth_channel.preset()
+
+accelerometer_channel = accelerometerChannel(board, pybadger, samples1)
+accelerometer_channel.preset()
+
 
 pale_green = [0,1,0]
 pale_blue = [0,0,1]
@@ -404,6 +442,8 @@ channel = light_channel
 vertical_input = 1
 
 run_slow = False
+start_time = time.monotonic_ns()
+sweep_time = 300
 
 def debounce(btn):
     pressed = False
@@ -417,6 +457,20 @@ def debounce(btn):
         pybadger.pixels[2] = black  
     return pressed
 
+st_label = Label(terminalio.FONT, text='*', max_glyphs=30)
+(x, y, w, h) = st_label.bounding_box
+st_label.x = x_left
+st_label.y = y_annot_top
+st_label.color = palette[1]
+group.append(st_label)
+
+dt_label = Label(terminalio.FONT, text='LIGHT', max_glyphs=30)
+(x, y, w, h) = dt_label.bounding_box
+dt_label.x = x_right - w
+dt_label.y = y_annot_top
+dt_label.color = palette[1]
+group.append(dt_label)
+
 while(True):
     
     # Check the buttons for the channel
@@ -424,21 +478,37 @@ while(True):
     
     if debounce(3):
         vertical_input += 1
-        if vertical_input > 2:
+        if vertical_input > 3:
             vertical_input = 0  
         
         if vertical_input == 0:
             channel = mic_channel
+            dt_label.text = 'MIC'
+            dt_label.x = x_right - dt_label.bounding_box[2]
+            st_label.text = 'ST: *ms'
         elif vertical_input == 1:
             channel = light_channel
-        else:
+            dt_label.text = 'LIGHT'
+            dt_label.x = x_right - dt_label.bounding_box[2]
+        elif vertical_input == 2:
             channel = sawtooth_channel
+            dt_label.text = 'SAWTOOTH'
+            dt_label.x = x_right - dt_label.bounding_box[2]
+        else:
+            channel = accelerometer_channel
+            dt_label.text = 'ACCEL'
+            dt_label.x = x_right - dt_label.bounding_box[2]
         
     # Turn the sweep LED on while taking samples
     pybadger.pixels[sweep_led] = pale_green
+    start_time = time.monotonic_ns()
+    
     channel.take_sweep()
-    pybadger.pixels[sweep_led] = black
-            
+    
+    sweep_time = (time.monotonic_ns() - start_time)/1000000.0
+    st_label.text = 'ST: ' + str(round(sweep_time)) + 'ms'
+    
+    pybadger.pixels[sweep_led] = black 
     # Draw the waveform to pixels on the display.
     # During the display update, light the refresh LED.
     pybadger.pixels[refresh_led] = pale_blue

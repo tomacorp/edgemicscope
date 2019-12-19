@@ -47,7 +47,9 @@ Buttons = namedtuple("Buttons", "b a start select right down up left")
 
 # pylint: disable=too-many-instance-attributes
 class PyBadger:
-    """PyBadger class."""
+    """PyBadger class. Instead of using the Adafruit version, I am moving the functionality to
+    the same underlying code that PyBadger calls. PyBadger is a good way to get started
+    because it hides some of the more advanced functionality. """
     # Button Constants
     BUTTON_LEFT = const(128)
     BUTTON_UP = const(64)
@@ -59,41 +61,10 @@ class PyBadger:
     BUTTON_B = const(1)
 
     def __init__(self, i2c=None):
-        # Accelerometer
-        if i2c is None:
-            try:
-                i2c = board.I2C()
-            except RuntimeError:
-                self._accelerometer = None
-
-        if i2c is not None:
-            int1 = digitalio.DigitalInOut(board.ACCELEROMETER_INTERRUPT)
-            try:
-                self._accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, address=0x19, int1=int1)
-            except ValueError:
-                self._accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)
-
         # Buttons
         self._buttons = GamePadShift(digitalio.DigitalInOut(board.BUTTON_CLOCK),
                                      digitalio.DigitalInOut(board.BUTTON_OUT),
                                      digitalio.DigitalInOut(board.BUTTON_LATCH))
-
-        # Display
-        self.display = board.DISPLAY
-
-        # Light sensor
-        self._light_sensor = analogio.AnalogIn(board.A7)
-
-        # NeoPixels
-        # Count is hardcoded - should be based on board ID, currently no board info for PyBadge LC
-        neopixel_count = 5
-        self._neopixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
-                                            pixel_order=neopixel.GRB)
-
-    @property
-    def pixels(self):
-        """Sequence like object representing the NeoPixels on the board."""
-        return self._neopixels
 
     @property
     def button(self):
@@ -102,25 +73,6 @@ class PyBadger:
                          (PyBadger.BUTTON_B, PyBadger.BUTTON_A, PyBadger.BUTTON_START,
                           PyBadger.BUTTON_SELECT, PyBadger.BUTTON_RIGHT,
                           PyBadger.BUTTON_DOWN, PyBadger.BUTTON_UP, PyBadger.BUTTON_LEFT)])
-
-    @property
-    def light(self):
-        """Light sensor data."""
-        return self._light_sensor.value
-
-    @property
-    def acceleration(self):
-        """Accelerometer data."""
-        return self._accelerometer.acceleration if self._accelerometer is not None else None
-
-    @property
-    def brightness(self):
-        """Display brightness."""
-        return self.display.brightness
-
-    @brightness.setter
-    def brightness(self, value):
-        self.display.brightness = value
 
 pybadger = PyBadger()
 
@@ -134,7 +86,7 @@ display = board.DISPLAY
 # Explicit refresh functions update the display.
 # The display refresh feature requires CircuitPython v5.0.0 or later.
 
-board.DISPLAY.auto_refresh = False
+display.auto_refresh = False
  
 # Create a bitmap with colors
 ncolors = 3
@@ -155,7 +107,6 @@ group = displayio.Group()
 # Add the TileGrid to the Group
 group.append(tile_grid)
 
-message_text = 'hello'
 BACKGROUND_TEXT_COLOR = 0xFFFFFF
 BG_COLOR2 = 0xFF00FF
  
@@ -169,11 +120,12 @@ display.show(group)
 # Define the bounds of the graph
 x_left = 10
 x_right = 140
-y_bottom = 120
-y_top = 20
+y_bottom = 114
+y_top = 14
 
 # Define the bounds of the annotation
 y_annot_top = 5
+y_annot_bottom = 123
 
 # Draw a frame around the graph
 for px in range(x_left-1, x_right+1):
@@ -221,7 +173,7 @@ def draw_trace(color_idx, channel):
             horizontal_counter -= 1
         sample_index += 1
         
-board.DISPLAY.refresh(minimum_frames_per_second=0)
+display.refresh(minimum_frames_per_second=0)
 
 # TODO:
 # Would like to have a button interrupt, especially for start/preset()
@@ -344,19 +296,18 @@ class lightChannel(sensorChannel):
         self.samples = samples
         self.board = board
         self.pybadger = pybadger
+        self.light_sensor = analogio.AnalogIn(board.A7)
         
     def preset(self):
         super().preset()
         self.vertical_gain = 8
         self.vertical_offset = 0
-        # self._light_sensor = analogio.AnalogIn(board.A7)
         
     def take_sweep(self):
         """ Take a sweep of light samples."""
            
         for a in range(self.num_samples):
-            self.samples[a] = int(self.pybadger.light * 1)
-            # self.samples[a] = int(self._light_sensor.value)
+            self.samples[a] = self.light_sensor.value
                 
 class sawtoothChannel(sensorChannel):
     """ Class to use a generated sawtooth waveform as a data channel. """
@@ -396,6 +347,18 @@ class accelerometerChannel(sensorChannel):
         self.samples = samples
         self.board = board
         self.pybadger = pybadger
+
+        try:
+            i2c = board.I2C()
+        except RuntimeError:
+            self.accelerometer = None
+
+        if i2c is not None:
+            int1 = digitalio.DigitalInOut(board.ACCELEROMETER_INTERRUPT)
+            try:
+                self.accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, address=0x19, int1=int1)
+            except ValueError:
+                self.accelerometer = adafruit_lis3dh.LIS3DH_I2C(i2c, int1=int1)       
         
     def preset(self):
         super().preset()
@@ -408,11 +371,11 @@ class accelerometerChannel(sensorChannel):
         # Scale the readings to look like ADC readings.
 
         for a in range(0, self.num_samples, 2):
-            accel_reading = self.pybadger.acceleration
+            accel_reading = self.accelerometer.acceleration
             accel = int(round(accel_reading.x + accel_reading.y + accel_reading.z) * 25.0) + 32768
             self.samples[a] = accel
             
-        # The accelerometer is slow, so interpolate between readings to make it sweep faster.
+        # The accelerometer is slow. Interpolate between readings to make it sweep faster.
         for a in range(1, self.num_samples, 2):
             self.samples[a] = (self.samples[a-1] + self.samples[a+1]) >> 1
 
@@ -429,6 +392,10 @@ sawtooth_channel.preset()
 accelerometer_channel = accelerometerChannel(board, pybadger, samples1)
 accelerometer_channel.preset()
 
+neopixel_count = 5
+pixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
+                                    pixel_order=neopixel.GRB)
+
 
 pale_green = [0,1,0]
 pale_blue = [0,0,1]
@@ -436,7 +403,7 @@ black = [0,0,0]
 sweep_led = 0
 refresh_led = 4
 
-board.DISPLAY.refresh(minimum_frames_per_second=0)
+display.refresh(minimum_frames_per_second=0)
 
 channel = light_channel
 vertical_input = 1
@@ -449,27 +416,31 @@ def debounce(btn):
     pressed = False
     if pybadger.button[btn]:
         pressed = True
-        pybadger.pixels[2] = pale_green
+        pixels[2] = pale_green
         while pybadger.button[btn]:
-            pybadger.pixels[2] = pale_blue
+            pixels[2] = pale_blue
             time.sleep(0.05)
     else:
-        pybadger.pixels[2] = black  
+        pixels[2] = black  
     return pressed
 
 st_label = Label(terminalio.FONT, text='*', max_glyphs=30)
-(x, y, w, h) = st_label.bounding_box
 st_label.x = x_left
 st_label.y = y_annot_top
 st_label.color = palette[1]
 group.append(st_label)
 
 dt_label = Label(terminalio.FONT, text='LIGHT', max_glyphs=30)
-(x, y, w, h) = dt_label.bounding_box
-dt_label.x = x_right - w
+dt_label.x = x_right - dt_label.bounding_box[2]
 dt_label.y = y_annot_top
 dt_label.color = palette[1]
 group.append(dt_label)
+
+status_label = Label(terminalio.FONT, text='EDGEMICSCOPE', max_glyphs=30)
+status_label.x = x_left
+status_label.y = y_annot_bottom
+status_label.color = palette[1]
+group.append(status_label)
 
 while(True):
     
@@ -500,7 +471,7 @@ while(True):
             dt_label.x = x_right - dt_label.bounding_box[2]
         
     # Turn the sweep LED on while taking samples
-    pybadger.pixels[sweep_led] = pale_green
+    pixels[sweep_led] = pale_green
     start_time = time.monotonic_ns()
     
     channel.take_sweep()
@@ -508,16 +479,16 @@ while(True):
     sweep_time = (time.monotonic_ns() - start_time)/1000000.0
     st_label.text = 'ST: ' + str(round(sweep_time)) + 'ms'
     
-    pybadger.pixels[sweep_led] = black 
+    pixels[sweep_led] = black 
     # Draw the waveform to pixels on the display.
     # During the display update, light the refresh LED.
-    pybadger.pixels[refresh_led] = pale_blue
+    pixels[refresh_led] = pale_blue
     draw_trace(1, channel)
     
     # Refresh the display. Repeat the call until it completes.
-    while not board.DISPLAY.refresh(minimum_frames_per_second=0):
+    while not display.refresh(minimum_frames_per_second=0):
         pass
         
     # Erase the waveform by redrawing the pixels with black.
     draw_trace(0, channel)
-    pybadger.pixels[refresh_led] = black
+    pixels[refresh_led] = black

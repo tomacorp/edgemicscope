@@ -326,144 +326,162 @@ class Button:
         pressed = False
         if self.select:
             pressed = True
-            pixels[2] = pale_green
+            lights.pixels[2] = lights.pale_green
             while self.select:
-                pixels[2] = pale_blue
+                lights.pixels[2] = lights.pale_blue
                 time.sleep(0.05)
                 self.scan()
         else:
-            pixels[2] = black  
+            lights.pixels[2] = lights.black  
         return pressed
 
 
-""" View 
-    TODO: Needs a class for the display.
-    Might need another class for the LEDs.
-"""
+""" View """
 
-def draw_trace(color_idx, channel):
-    """Draw a trace on the screen"""
+class DisplayView(object):
+    global x_left
+    global x_right
+    global y_bottom
+    global y_top
+    
+    def __init__(self, display):
+        # To synchronize the display update to the waveform update,
+        # turn off automatic display refresh.
+        # Explicit refresh functions update the display.
+        # The display refresh feature requires CircuitPython v5.0.0 or later.
+        
+        self.display = display
+        display.auto_refresh = False
+         
+        # Create a bitmap with colors
+        ncolors = 3
+        self.bitmap = displayio.Bitmap(self.display.width, self.display.height, ncolors)
+         
+        # Create a color palette
+        palette = displayio.Palette(ncolors)
+        palette[0] = 0x000000
+        palette[1] = 0x00ff00
+        palette[2] = 0xaaaaaa
+         
+        # Create a TileGrid using the Bitmap and Palette
+        tile_grid = displayio.TileGrid(self.bitmap, pixel_shader=palette)
+         
+        # Create a Group
+        group = displayio.Group()
+         
+        # Add the TileGrid to the Group
+        group.append(tile_grid)
+         
+        # Add the Group to the Display
+        self.display.show(group)
+         
+        # The display width is 160 and the height is 128
+        #   Positive y is down
+        #   Positive x is right
+        
+        # Define the bounds of the graph
+        x_left = 10
+        x_right = 140
+        y_bottom = 114
+        y_top = 14
+        
+        # Define the bounds of the annotation
+        y_annot_top = 5
+        y_annot_bottom = 123
+        
+        # Draw a frame around the graph
+        for px in range(x_left-1, x_right+1):
+            self.bitmap[px, y_top-1] = 2
+            self.bitmap[px, y_bottom+1] = 2
+        for py in range(y_top-1, y_bottom+1):
+            self.bitmap[x_left-1, py] = 2
+            self.bitmap[x_right+1, py] = 2
+        
+        # Draw labels to annotate the display
+        self.st_label = Label(terminalio.FONT, text='*', max_glyphs=30)
+        self.st_label.x = x_left
+        self.st_label.y = y_annot_top
+        self.st_label.color = palette[1]
+        group.append(self.st_label)
+        
+        self.dt_label = Label(terminalio.FONT, text='LIGHT', max_glyphs=30)
+        self.dt_label.x = x_right - self.dt_label.bounding_box[2]
+        self.dt_label.y = y_annot_top
+        self.dt_label.color = palette[1]
+        group.append(self.dt_label)
+        
+        self.status_label = Label(terminalio.FONT, text='EDGEMICSCOPE', max_glyphs=30)
+        self.status_label.x = x_left
+        self.status_label.y = y_annot_bottom
+        self.status_label.color = palette[1]
+        group.append(self.status_label)        
 
-    """Globals:
-        Screen:
-          - x_left
-          - x_right
-          - y_bottom
-          - y_top
-          
-       Channel settings:   
-        Display:
-          - num_samples_per_px
-          - adc_midscale
-          - vertical_offset
-          - vertical_gain
-        Sampling:
-          - start_sample
-          - num_samples
-    """
-    x = x_left
-    horizontal_counter = channel.num_samples_per_px
-    sample_index = channel.start_sample
-    while (x < x_right) and (sample_index < channel.num_samples):
-        y = channel.vertical_offset - ((channel.samples[sample_index] - 
-                channel.adc_midscale) >> channel.vertical_gain)
-        if y > y_bottom:
-            y = y_bottom
-        elif y < y_top:
-            y = y_top
-        bitmap[x, y] = color_idx
-        if horizontal_counter == 0:
-            x += 1
-            horizontal_counter = channel.num_samples_per_px
-        else:
-            horizontal_counter -= 1
-        sample_index += 1
+    def draw_trace(self, color_idx, channel):
+        """Draw a trace on the screen"""
+    
+        """Globals:
+            Screen:
+              - x_left
+              - x_right
+              - y_bottom
+              - y_top
+              
+           Channel settings:   
+            Display:
+              - num_samples_per_px
+              - adc_midscale
+              - vertical_offset
+              - vertical_gain
+            Sampling:
+              - start_sample
+              - num_samples
+        """
+        x = x_left
+        horizontal_counter = channel.num_samples_per_px
+        sample_index = channel.start_sample
+        while (x < x_right) and (sample_index < channel.num_samples):
+            y = channel.vertical_offset - ((channel.samples[sample_index] - 
+                    channel.adc_midscale) >> channel.vertical_gain)
+            if y > y_bottom:
+                y = y_bottom
+            elif y < y_top:
+                y = y_top
+            self.bitmap[x, y] = color_idx
+            if horizontal_counter == 0:
+                x += 1
+                horizontal_counter = channel.num_samples_per_px
+            else:
+                horizontal_counter -= 1
+            sample_index += 1
 
-display = board.DISPLAY
+""" LED initialization """
 
-# To synchronize the display update to the waveform update,
-# turn off automatic display refresh.
-# Explicit refresh functions update the display.
-# The display refresh feature requires CircuitPython v5.0.0 or later.
+class LedView(object):
+    """Class to operate the NeoPixels"""
+    import neopixel
+    
+    def __init__(self, leds):
+        neopixel_count = 5
+        self.pixels = neopixel.NeoPixel(leds, neopixel_count,
+                                            pixel_order=neopixel.GRB)
+        
+        self.pale_green = [0,1,0]
+        self.pale_blue = [0,0,1]
+        self.black = [0,0,0]
+        self.sweep_led = 0
+        self.refresh_led = 4
 
-display.auto_refresh = False
- 
-# Create a bitmap with colors
-ncolors = 3
-bitmap = displayio.Bitmap(display.width, display.height, ncolors)
- 
-# Create a color palette
-palette = displayio.Palette(ncolors)
-palette[0] = 0x000000
-palette[1] = 0x00ff00
-palette[2] = 0xaaaaaa
- 
-# Create a TileGrid using the Bitmap and Palette
-tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette)
- 
-# Create a Group
-group = displayio.Group()
- 
-# Add the TileGrid to the Group
-group.append(tile_grid)
- 
-# Add the Group to the Display
-display.show(group)
- 
-# The display width is 160 and the height is 128
-#   Positive y is down
-#   Positive x is right
+""" Controller """
 
-# Define the bounds of the graph
+
 x_left = 10
 x_right = 140
 y_bottom = 114
 y_top = 14
 
-# Define the bounds of the annotation
-y_annot_top = 5
-y_annot_bottom = 123
+screen = DisplayView(board.DISPLAY)
+lights = LedView(board.NEOPIXEL)
 
-# Draw a frame around the graph
-for px in range(x_left-1, x_right+1):
-    bitmap[px, y_top-1] = 2
-    bitmap[px, y_bottom+1] = 2
-for py in range(y_top-1, y_bottom+1):
-    bitmap[x_left-1, py] = 2
-    bitmap[x_right+1, py] = 2
-
-# Draw labels to annotate the display
-st_label = Label(terminalio.FONT, text='*', max_glyphs=30)
-st_label.x = x_left
-st_label.y = y_annot_top
-st_label.color = palette[1]
-group.append(st_label)
-
-dt_label = Label(terminalio.FONT, text='LIGHT', max_glyphs=30)
-dt_label.x = x_right - dt_label.bounding_box[2]
-dt_label.y = y_annot_top
-dt_label.color = palette[1]
-group.append(dt_label)
-
-status_label = Label(terminalio.FONT, text='EDGEMICSCOPE', max_glyphs=30)
-status_label.x = x_left
-status_label.y = y_annot_bottom
-status_label.color = palette[1]
-group.append(status_label)
-
-""" LED initialization """
-
-neopixel_count = 5
-pixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
-                                    pixel_order=neopixel.GRB)
-
-pale_green = [0,1,0]
-pale_blue = [0,0,1]
-black = [0,0,0]
-sweep_led = 0
-refresh_led = 4
-
-""" Controller """
 # Allocate memory to store up to 0.5 seconds of audio
 samples1 = array.array('H', [0] * 8000)
 
@@ -481,7 +499,7 @@ sawtooth_channel.preset()
 accelerometer_channel = accelerometerChannel(board, button, samples1)
 accelerometer_channel.preset()
 
-display.refresh(minimum_frames_per_second=0)
+screen.display.refresh(minimum_frames_per_second=0)
 
 channel = light_channel
 vertical_input = 1
@@ -499,41 +517,41 @@ while(True):
         
         if vertical_input == 0:
             channel = mic_channel
-            dt_label.text = 'MIC'
-            dt_label.x = x_right - dt_label.bounding_box[2]
-            st_label.text = 'ST: *ms'
+            screen.dt_label.text = 'MIC'
+            screen.dt_label.x = x_right - screen.dt_label.bounding_box[2]
+            screen.st_label.text = 'ST: *ms'
         elif vertical_input == 1:
             channel = light_channel
-            dt_label.text = 'LIGHT'
-            dt_label.x = x_right - dt_label.bounding_box[2]
+            screen.dt_label.text = 'LIGHT'
+            screen.dt_label.x = x_right - screen.dt_label.bounding_box[2]
         elif vertical_input == 2:
             channel = sawtooth_channel
-            dt_label.text = 'SAWTOOTH'
-            dt_label.x = x_right - dt_label.bounding_box[2]
+            screen.dt_label.text = 'SAWTOOTH'
+            screen.dt_label.x = x_right - screen.dt_label.bounding_box[2]
         else:
             channel = accelerometer_channel
-            dt_label.text = 'ACCEL'
-            dt_label.x = x_right - dt_label.bounding_box[2]
+            screen.dt_label.text = 'ACCEL'
+            screen.dt_label.x = x_right - screen.dt_label.bounding_box[2]
         
     # Turn the sweep LED on while taking samples
-    pixels[sweep_led] = pale_green
+    lights.pixels[lights.sweep_led] = lights.pale_green
     start_time = time.monotonic_ns()
     
     channel.take_sweep()
     
     sweep_time = (time.monotonic_ns() - start_time)/1000000.0
-    st_label.text = 'ST: ' + str(round(sweep_time)) + 'ms'
+    screen.st_label.text = 'ST: ' + str(round(sweep_time)) + 'ms'
     
-    pixels[sweep_led] = black 
+    lights.pixels[lights.sweep_led] = lights.black 
     # Draw the waveform to pixels on the display.
     # During the display update, light the refresh LED.
-    pixels[refresh_led] = pale_blue
-    draw_trace(1, channel)
+    lights.pixels[lights.refresh_led] = lights.pale_blue
+    screen.draw_trace(1, channel)
     
     # Refresh the display. Repeat the call until it completes.
-    while not display.refresh(minimum_frames_per_second=0):
+    while not screen.display.refresh(minimum_frames_per_second=0):
         pass
         
     # Erase the waveform by redrawing the pixels with black.
-    draw_trace(0, channel)
-    pixels[refresh_led] = black
+    screen.draw_trace(0, channel)
+    lights.pixels[lights.refresh_led] = lights.black

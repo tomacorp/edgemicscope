@@ -31,7 +31,6 @@ import displayio
 import board
 import analogio
 
-from collections import namedtuple
 from micropython import const
 import digitalio
 import audioio
@@ -43,148 +42,28 @@ from adafruit_bitmap_font import bitmap_font
 import terminalio
 import adafruit_lis3dh
 
-Buttons = namedtuple("Buttons", "b a start select right down up left")
-
 # pylint: disable=too-many-instance-attributes
-class PyBadger:
-    """PyBadger class. Instead of using the Adafruit version, I am moving the functionality to
-    the same underlying code that PyBadger calls. PyBadger is a good way to get started
-    because it hides some of the more advanced functionality. """
-    # Button Constants
-    BUTTON_LEFT = const(128)
-    BUTTON_UP = const(64)
-    BUTTON_DOWN = const(32)
-    BUTTON_RIGHT = const(16)
-    BUTTON_SELECT = const(8)
-    BUTTON_START = const(4)
-    BUTTON_A = const(2)
-    BUTTON_B = const(1)
 
-    def __init__(self, i2c=None):
-        # Buttons
-        self._buttons = GamePadShift(digitalio.DigitalInOut(board.BUTTON_CLOCK),
-                                     digitalio.DigitalInOut(board.BUTTON_OUT),
-                                     digitalio.DigitalInOut(board.BUTTON_LATCH))
+""" Model View Controller Architecture 
+    Code is in the process of being refactored to fit MVC.
+"""
 
-    @property
-    def button(self):
-        button_values = self._buttons.get_pressed()
-        return Buttons(*[button_values & button for button in
-                         (PyBadger.BUTTON_B, PyBadger.BUTTON_A, PyBadger.BUTTON_START,
-                          PyBadger.BUTTON_SELECT, PyBadger.BUTTON_RIGHT,
-                          PyBadger.BUTTON_DOWN, PyBadger.BUTTON_UP, PyBadger.BUTTON_LEFT)])
-
-pybadger = PyBadger()
-
-# Record up to 0.5 seconds of audio
-samples1 = array.array('H', [0] * 8000)
-
-display = board.DISPLAY
-
-# To synchronize the display update to the waveform update,
-# turn off automatic display refresh.
-# Explicit refresh functions update the display.
-# The display refresh feature requires CircuitPython v5.0.0 or later.
-
-display.auto_refresh = False
- 
-# Create a bitmap with colors
-ncolors = 3
-bitmap = displayio.Bitmap(display.width, display.height, ncolors)
- 
-# Create a color palette
-palette = displayio.Palette(ncolors)
-palette[0] = 0x000000
-palette[1] = 0x00ff00
-palette[2] = 0xaaaaaa
- 
-# Create a TileGrid using the Bitmap and Palette
-tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette)
- 
-# Create a Group
-group = displayio.Group()
- 
-# Add the TileGrid to the Group
-group.append(tile_grid)
-
-BACKGROUND_TEXT_COLOR = 0xFFFFFF
-BG_COLOR2 = 0xFF00FF
- 
-# Add the Group to the Display
-display.show(group)
- 
-# The display width is 160 and the height is 128
-#   Positive y is down
-#   Positive x is right
-
-# Define the bounds of the graph
-x_left = 10
-x_right = 140
-y_bottom = 114
-y_top = 14
-
-# Define the bounds of the annotation
-y_annot_top = 5
-y_annot_bottom = 123
-
-# Draw a frame around the graph
-for px in range(x_left-1, x_right+1):
-    bitmap[px, y_top-1] = 2
-    bitmap[px, y_bottom+1] = 2
-for py in range(y_top-1, y_bottom+1):
-    bitmap[x_left-1, py] = 2
-    bitmap[x_right+1, py] = 2
-
-def draw_trace(color_idx, channel):
-    """Draw a trace on the screen"""
-
-    """Globals:
-        Screen:
-          - x_left
-          - x_right
-          - y_bottom
-          - y_top
-          
-       Channel settings:   
-        Display:
-          - num_samples_per_px
-          - adc_midscale
-          - vertical_offset
-          - vertical_gain
-        Sampling:
-          - start_sample
-          - num_samples
-    """
-    x = x_left
-    horizontal_counter = channel.num_samples_per_px
-    sample_index = channel.start_sample
-    while (x < x_right) and (sample_index < channel.num_samples):
-        y = channel.vertical_offset - ((channel.samples[sample_index] - 
-                channel.adc_midscale) >> channel.vertical_gain)
-        if y > y_bottom:
-            y = y_bottom
-        elif y < y_top:
-            y = y_top
-        bitmap[x, y] = color_idx
-        if horizontal_counter == 0:
-            x += 1
-            horizontal_counter = channel.num_samples_per_px
-        else:
-            horizontal_counter -= 1
-        sample_index += 1
         
-display.refresh(minimum_frames_per_second=0)
+""" Hardware model classes:
+        sensorChannel has the shared code for:
+          - Processing a signal
+          - Assigning actions to the buttons.
+        The sensors inherit the sensorChannel. The channel code:
+          - Interfaces to the hardware
+          - Scales the output data
+          - Has a take_sweep() function to take a trace full of data.
 
-# TODO:
-# Would like to have a button interrupt, especially for start/preset()
-# Debounce button method for all buttons
-#
-# Add accelerometer channel
-#
-
+"""
+        
 class sensorChannel(object):
-    def __init__(self, pybadger):
-        self.pybadger = pybadger
+    def __init__(self, button):
+        
+        self.button = button
         
         self.vertical_offset = 64
         self.num_samples_per_px = 2
@@ -253,28 +132,27 @@ class sensorChannel(object):
             self.num_samples = self.max_num_samples
 
     def buttons(self):
-        
-        if self.pybadger.button.a:
+        self.button.scan()
+        if self.button.a:
             self.increase_gain()
-        if self.pybadger.button.b:
+        if self.button.b:
             self.decrease_gain()
-        if self.pybadger.button.down:
+        if self.button.down:
             self.increase_offset()
-        if self.pybadger.button.up:
+        if self.button.up:
             self.decrease_offset()
-        if self.pybadger.button.left:
+        if self.button.left:
             self.increase_samples()        
-        if self.pybadger.button.right:
+        if self.button.right:
             self.decrease_samples()
-
-        if self.pybadger.button.start:
-            self.preset()  
+        if self.button.start:
+            self.preset()
             
 class micChannel(sensorChannel):
     """ Class to use the light sensor as a data channel. """
     
-    def __init__(self, board, pybadger, samples):
-        super().__init__(pybadger)
+    def __init__(self, board, button, samples):
+        super().__init__(button)
         self.samples = samples
         self.board = board
         self.mic = audiobusio.PDMIn(
@@ -291,11 +169,10 @@ class micChannel(sensorChannel):
 class lightChannel(sensorChannel):
     """ Class to use the light sensor as a data channel. """
         
-    def __init__(self, board, pybadger, samples):
-        super().__init__(pybadger)
+    def __init__(self, board, button, samples):
+        super().__init__(button)
         self.samples = samples
         self.board = board
-        self.pybadger = pybadger
         self.light_sensor = analogio.AnalogIn(board.A7)
         
     def preset(self):
@@ -312,11 +189,10 @@ class lightChannel(sensorChannel):
 class sawtoothChannel(sensorChannel):
     """ Class to use a generated sawtooth waveform as a data channel. """
         
-    def __init__(self, board, pybadger, samples):
-        super().__init__(pybadger)
+    def __init__(self, board, button, samples):
+        super().__init__(button)
         self.samples = samples
         self.board = board
-        self.pybadger = pybadger
         self.vert_peak = 1000
         self.vert_start = 32768 - self.vert_peak
         self.vert_stop = 32768 + self.vert_peak
@@ -342,11 +218,10 @@ class sawtoothChannel(sensorChannel):
 class accelerometerChannel(sensorChannel):
     """ Class to use the accelerometer as a data channel. """
     
-    def __init__(self, board, pybadger, samples):
-        super().__init__(pybadger)
+    def __init__(self, board, button, samples):
+        super().__init__(button)
         self.samples = samples
         self.board = board
-        self.pybadger = pybadger
 
         try:
             i2c = board.I2C()
@@ -379,51 +254,185 @@ class accelerometerChannel(sensorChannel):
         for a in range(1, self.num_samples, 2):
             self.samples[a] = (self.samples[a-1] + self.samples[a+1]) >> 1
 
+class Button:
+    """Class to read Buttons on AdaFruit EDGE Badge. 
+    
+    Need to debounce all the buttons in here, and also detect chords.
+    Chords can be captured as maximum value during press.
+    Instead of sleeping, should set a flag meaning 'button(s) are down'
+    And then another flag when they are all stable and up.
+    Use timestamps instead of delays so maybe things can continue
+    to happen. This requires some sort of threading or interrupts? 
+    Or maybe it spins inside here?
+    
+    Would like to have a button interrupt, especially for start/preset()
+    Need a debounce button method for all buttons
+
+    """
+    
+    # Button Constants
+    BUTTON_LEFT = const(128)
+    BUTTON_UP = const(64)
+    BUTTON_DOWN = const(32)
+    BUTTON_RIGHT = const(16)
+    BUTTON_SELECT = const(8)
+    BUTTON_START = const(4)
+    BUTTON_A = const(2)
+    BUTTON_B = const(1)
+
+    def __init__(self, i2c=None):
+        # Buttons
+        self._buttons = GamePadShift(digitalio.DigitalInOut(board.BUTTON_CLOCK),
+                                     digitalio.DigitalInOut(board.BUTTON_OUT),
+                                     digitalio.DigitalInOut(board.BUTTON_LATCH))
+        self.button_values = self._buttons.get_pressed()
         
-mic_channel = micChannel(board, pybadger, samples1)
-mic_channel.preset()
+    def scan(self):
+        self.button_values = self._buttons.get_pressed()        
 
-light_channel = lightChannel(board, pybadger, samples1)
-light_channel.preset()
+    @property
+    def left(self):
+        return self.button_values & BUTTON_LEFT
+        
+    @property
+    def up(self):
+        return self.button_values & BUTTON_UP
+        
+    @property
+    def down(self):
+        return self.button_values & BUTTON_DOWN
+        
+    @property
+    def right(self):
+        return self.button_values & BUTTON_RIGHT
+        
+    @property
+    def select(self):
+        return self.button_values & BUTTON_SELECT
+        
+    @property
+    def start(self):
+        return self.button_values & BUTTON_START
+        
+    @property
+    def a(self):
+        return self.button_values & BUTTON_A
+        
+    @property
+    def b(self):
+        return self.button_values & BUTTON_B        
 
-sawtooth_channel = sawtoothChannel(board, pybadger, samples1)
-sawtooth_channel.preset()
+    def debounce_select(self):
+        pressed = False
+        if self.select:
+            pressed = True
+            pixels[2] = pale_green
+            while self.select:
+                pixels[2] = pale_blue
+                time.sleep(0.05)
+                self.scan()
+        else:
+            pixels[2] = black  
+        return pressed
 
-accelerometer_channel = accelerometerChannel(board, pybadger, samples1)
-accelerometer_channel.preset()
 
-neopixel_count = 5
-pixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
-                                    pixel_order=neopixel.GRB)
+""" View 
+    TODO: Needs a class for the display.
+    Might need another class for the LEDs.
+"""
 
+def draw_trace(color_idx, channel):
+    """Draw a trace on the screen"""
 
-pale_green = [0,1,0]
-pale_blue = [0,0,1]
-black = [0,0,0]
-sweep_led = 0
-refresh_led = 4
+    """Globals:
+        Screen:
+          - x_left
+          - x_right
+          - y_bottom
+          - y_top
+          
+       Channel settings:   
+        Display:
+          - num_samples_per_px
+          - adc_midscale
+          - vertical_offset
+          - vertical_gain
+        Sampling:
+          - start_sample
+          - num_samples
+    """
+    x = x_left
+    horizontal_counter = channel.num_samples_per_px
+    sample_index = channel.start_sample
+    while (x < x_right) and (sample_index < channel.num_samples):
+        y = channel.vertical_offset - ((channel.samples[sample_index] - 
+                channel.adc_midscale) >> channel.vertical_gain)
+        if y > y_bottom:
+            y = y_bottom
+        elif y < y_top:
+            y = y_top
+        bitmap[x, y] = color_idx
+        if horizontal_counter == 0:
+            x += 1
+            horizontal_counter = channel.num_samples_per_px
+        else:
+            horizontal_counter -= 1
+        sample_index += 1
 
-display.refresh(minimum_frames_per_second=0)
+display = board.DISPLAY
 
-channel = light_channel
-vertical_input = 1
+# To synchronize the display update to the waveform update,
+# turn off automatic display refresh.
+# Explicit refresh functions update the display.
+# The display refresh feature requires CircuitPython v5.0.0 or later.
 
-run_slow = False
-start_time = time.monotonic_ns()
-sweep_time = 300
+display.auto_refresh = False
+ 
+# Create a bitmap with colors
+ncolors = 3
+bitmap = displayio.Bitmap(display.width, display.height, ncolors)
+ 
+# Create a color palette
+palette = displayio.Palette(ncolors)
+palette[0] = 0x000000
+palette[1] = 0x00ff00
+palette[2] = 0xaaaaaa
+ 
+# Create a TileGrid using the Bitmap and Palette
+tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette)
+ 
+# Create a Group
+group = displayio.Group()
+ 
+# Add the TileGrid to the Group
+group.append(tile_grid)
+ 
+# Add the Group to the Display
+display.show(group)
+ 
+# The display width is 160 and the height is 128
+#   Positive y is down
+#   Positive x is right
 
-def debounce(btn):
-    pressed = False
-    if pybadger.button[btn]:
-        pressed = True
-        pixels[2] = pale_green
-        while pybadger.button[btn]:
-            pixels[2] = pale_blue
-            time.sleep(0.05)
-    else:
-        pixels[2] = black  
-    return pressed
+# Define the bounds of the graph
+x_left = 10
+x_right = 140
+y_bottom = 114
+y_top = 14
 
+# Define the bounds of the annotation
+y_annot_top = 5
+y_annot_bottom = 123
+
+# Draw a frame around the graph
+for px in range(x_left-1, x_right+1):
+    bitmap[px, y_top-1] = 2
+    bitmap[px, y_bottom+1] = 2
+for py in range(y_top-1, y_bottom+1):
+    bitmap[x_left-1, py] = 2
+    bitmap[x_right+1, py] = 2
+
+# Draw labels to annotate the display
 st_label = Label(terminalio.FONT, text='*', max_glyphs=30)
 st_label.x = x_left
 st_label.y = y_annot_top
@@ -442,12 +451,48 @@ status_label.y = y_annot_bottom
 status_label.color = palette[1]
 group.append(status_label)
 
+""" LED initialization """
+
+neopixel_count = 5
+pixels = neopixel.NeoPixel(board.NEOPIXEL, neopixel_count,
+                                    pixel_order=neopixel.GRB)
+
+pale_green = [0,1,0]
+pale_blue = [0,0,1]
+black = [0,0,0]
+sweep_led = 0
+refresh_led = 4
+
+""" Controller """
+# Allocate memory to store up to 0.5 seconds of audio
+samples1 = array.array('H', [0] * 8000)
+
+button = Button()
+    
+mic_channel = micChannel(board, button, samples1)
+mic_channel.preset()
+
+light_channel = lightChannel(board, button, samples1)
+light_channel.preset()
+
+sawtooth_channel = sawtoothChannel(board, button, samples1)
+sawtooth_channel.preset()
+
+accelerometer_channel = accelerometerChannel(board, button, samples1)
+accelerometer_channel.preset()
+
+display.refresh(minimum_frames_per_second=0)
+
+channel = light_channel
+vertical_input = 1
+
 while(True):
     
     # Check the buttons for the channel
     channel.buttons()
     
-    if debounce(3):
+    # if button.select:
+    if channel.button.debounce_select():
         vertical_input += 1
         if vertical_input > 3:
             vertical_input = 0  

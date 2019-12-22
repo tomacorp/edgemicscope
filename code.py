@@ -1,5 +1,6 @@
 # Tom Anderson
 # Tue Nov 19 20:25:05 PST 2019
+# Sat Dec 21 18:57:39 PST 2019
 
 """
 Program to display a microphone waveform on the display of
@@ -18,7 +19,10 @@ Down:  push trace down
 Left:  faster sweep, fewer points
 Right: slower sweep, more points
 
-https://www.adafruitdaily.com/2019/11/19/a-supercon-was-had-arm-aiot-dev-summit-is-almost-here-and-more-python-adafruit-circuitpython-pythonhardware-circuitpython-micropython-thepsf-adafruit/
+For a photos and a description see:
+https://www.adafruitdaily.com/2019/11/19/
+a-supercon-was-had-arm-aiot-dev-summit-is-almost-here-and-more-python-
+adafruit-circuitpython-pythonhardware-circuitpython-micropython-thepsf-adafruit/
 
 """
 
@@ -42,18 +46,18 @@ from adafruit_bitmap_font import bitmap_font
 import terminalio
 import adafruit_lis3dh
 
-# pylint: disable=too-many-instance-attributes
-
 """ Model View Controller Architecture 
-    Code is in the process of being refactored to fit MVC.
-"""
+    The Model and View are in classes.
+    The Controller is the initialization and run loop.
 
-        
-""" Hardware model classes:
+
+    Hardware model classes:
         sensorChannel has the shared code for:
           - Processing a signal
           - Assigning actions to the buttons.
-        The sensors inherit the sensorChannel. The channel code:
+          
+        Each sensor inherits the sensorChannel class. 
+        The sensor-specific classes:
           - Interfaces to the hardware
           - Scales the output data
           - Has a take_sweep() function to take a trace full of data.
@@ -241,7 +245,9 @@ class accelerometerChannel(sensorChannel):
     def take_sweep(self):
         """ Take a sweep of accelerometer measurements."""
         
-        """ Question: what is best lightweight algorithm to make a swept graph of acceleration interesting? """
+        """ Question: what is best lightweight algorithm to make 
+        a swept graph of acceleration interesting? 
+        Right now it is using the sum of the accelerations in x, y, and z."""
         
         # Scale the readings to look like ADC readings.
 
@@ -255,8 +261,10 @@ class accelerometerChannel(sensorChannel):
             self.samples[a] = (self.samples[a-1] + self.samples[a+1]) >> 1
 
 class Button:
-    """Class to read Buttons on AdaFruit EDGE Badge. 
+    """Class to read Buttons on AdaFruit EDGE Badge."""
     
+    """
+    TODO:
     Need to debounce all the buttons in here, and also detect chords.
     Chords can be captured as maximum value during press.
     Instead of sleeping, should set a flag meaning 'button(s) are down'
@@ -280,12 +288,13 @@ class Button:
     BUTTON_A = const(2)
     BUTTON_B = const(1)
 
-    def __init__(self, i2c=None):
+    def __init__(self, lights=None, i2c=None):
         # Buttons
         self._buttons = GamePadShift(digitalio.DigitalInOut(board.BUTTON_CLOCK),
                                      digitalio.DigitalInOut(board.BUTTON_OUT),
                                      digitalio.DigitalInOut(board.BUTTON_LATCH))
         self.button_values = self._buttons.get_pressed()
+        self.lights = lights
         
     def scan(self):
         self.button_values = self._buttons.get_pressed()        
@@ -320,15 +329,19 @@ class Button:
         
     @property
     def b(self):
-        return self.button_values & BUTTON_B        
-
+        return self.button_values & BUTTON_B
+    
+    def set_light_color(self, color_attr):
+        if self.lights is not None:
+            lights.pixels[2] = getattr(self.lights, color_attr)
+            
     def debounce_select(self):
         pressed = False
         if self.select:
             pressed = True
             lights.pixels[2] = lights.pale_green
             while self.select:
-                lights.pixels[2] = lights.pale_blue
+                self.set_light_color('pale_blue')
                 time.sleep(0.05)
                 self.scan()
         else:
@@ -454,25 +467,38 @@ class DisplayView(object):
                 horizontal_counter -= 1
             sample_index += 1
 
-""" LED initialization """
+
 
 class LedView(object):
     """Class to operate the NeoPixels"""
+    
     import neopixel
     
+    PIXEL_SWEEP = const(0)
+    PIXEL_SELECT = const(2)
+    PIXEL_REFRESH = const(4)
+
+    
     def __init__(self, leds):
+        """ Neopixel initialization """
+        
         neopixel_count = 5
         self.pixels = neopixel.NeoPixel(leds, neopixel_count,
                                             pixel_order=neopixel.GRB)
-        
         self.pale_green = [0,1,0]
         self.pale_blue = [0,0,1]
         self.black = [0,0,0]
         self.sweep_led = 0
         self.refresh_led = 4
+        
+    def set_light_color(self, pixel_idx, color_attr):
+        """ Set one neopixel to a predefined color. """
+        if self.pixels is not None:
+            color = getattr(self, color_attr)
+            if color is not None:  
+                 self.pixels[pixel_idx] = color
 
 """ Controller """
-
 
 x_left = 10
 x_right = 140
@@ -485,7 +511,7 @@ lights = LedView(board.NEOPIXEL)
 # Allocate memory to store up to 0.5 seconds of audio
 samples1 = array.array('H', [0] * 8000)
 
-button = Button()
+button = Button(lights)
     
 mic_channel = micChannel(board, button, samples1)
 mic_channel.preset()
@@ -508,8 +534,6 @@ while(True):
     
     # Check the buttons for the channel
     channel.buttons()
-    
-    # if button.select:
     if channel.button.debounce_select():
         vertical_input += 1
         if vertical_input > 3:
@@ -534,18 +558,19 @@ while(True):
             screen.dt_label.x = x_right - screen.dt_label.bounding_box[2]
         
     # Turn the sweep LED on while taking samples
-    lights.pixels[lights.sweep_led] = lights.pale_green
+    lights.set_light_color(LedView.PIXEL_SWEEP, 'pale_green')
     start_time = time.monotonic_ns()
     
     channel.take_sweep()
     
     sweep_time = (time.monotonic_ns() - start_time)/1000000.0
     screen.st_label.text = 'ST: ' + str(round(sweep_time)) + 'ms'
-    
-    lights.pixels[lights.sweep_led] = lights.black 
-    # Draw the waveform to pixels on the display.
+    lights.set_light_color(LedView.PIXEL_SWEEP, 'black')
+
     # During the display update, light the refresh LED.
-    lights.pixels[lights.refresh_led] = lights.pale_blue
+    lights.set_light_color(LedView.PIXEL_REFRESH, 'pale_blue')
+    
+    # Draw the waveform to pixels on the display.
     screen.draw_trace(1, channel)
     
     # Refresh the display. Repeat the call until it completes.
@@ -554,4 +579,6 @@ while(True):
         
     # Erase the waveform by redrawing the pixels with black.
     screen.draw_trace(0, channel)
-    lights.pixels[lights.refresh_led] = lights.black
+    lights.set_light_color(LedView.PIXEL_REFRESH, 'black')
+    
+    

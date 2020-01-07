@@ -20,7 +20,7 @@
 
 # Tom Anderson
 # Tue Nov 19 20:25:05 PST 2019
-# Sat Dec 21 18:57:39 PST 2019
+# Sun Dec 22 00:13:15 PST 2019
 
 """
 Program to display a microphone waveform on the display of
@@ -46,7 +46,6 @@ adafruit-circuitpython-pythonhardware-circuitpython-micropython-thepsf-adafruit/
 
 """
 
-from adafruit_debouncer import Debouncer
 import array
 import math
 import time
@@ -60,28 +59,24 @@ import digitalio
 import audioio
 from gamepadshift import GamePadShift
 import neopixel
-from adafruit_display_shapes.rect import Rect
 from adafruit_display_text.label import Label
-from adafruit_bitmap_font import bitmap_font
 import terminalio
 import adafruit_lis3dh
 
 """ Model View Controller Architecture 
     The Model and View are in classes.
-    The Controller is the initialization and run loop.
-
+    The Controller is the initialization and run loop and has no class.
 
     Hardware model classes:
-        sensorChannel has the shared code for:
+        sensorChannel is the shared code for:
           - Processing a signal
-          - Assigning actions to the buttons.
+          - Assigning actions to the buttons: gain, offset, number of samples
           
         Each sensor inherits the sensorChannel class. 
         The sensor-specific classes:
           - Interfaces to the hardware
           - Scales the output data
           - Has a take_sweep() function to take a trace full of data.
-
 """
         
 class sensorChannel(object):
@@ -321,35 +316,35 @@ class Button:
 
     @property
     def left(self):
-        return self.button_values & BUTTON_LEFT
+        return self.button_values & self.BUTTON_LEFT
         
     @property
     def up(self):
-        return self.button_values & BUTTON_UP
+        return self.button_values & self.BUTTON_UP
         
     @property
     def down(self):
-        return self.button_values & BUTTON_DOWN
+        return self.button_values & self.BUTTON_DOWN
         
     @property
     def right(self):
-        return self.button_values & BUTTON_RIGHT
+        return self.button_values & self.BUTTON_RIGHT
         
     @property
     def select(self):
-        return self.button_values & BUTTON_SELECT
+        return self.button_values & self.BUTTON_SELECT
         
     @property
     def start(self):
-        return self.button_values & BUTTON_START
+        return self.button_values & self.BUTTON_START
         
     @property
     def a(self):
-        return self.button_values & BUTTON_A
+        return self.button_values & self.BUTTON_A
         
     @property
     def b(self):
-        return self.button_values & BUTTON_B
+        return self.button_values & self.BUTTON_B
     
     def set_light_color(self, color_attr):
         if self.lights is not None:
@@ -513,7 +508,14 @@ class LedView(object):
         if self.pixels is not None:
             color = getattr(self, color_attr)
             if color is not None:  
-                 self.pixels[pixel_idx] = color
+                self.pixels[pixel_idx] = color
+                
+""" 
+TODO: Move the screen size to one place.
+Clean up the number of points on the display,
+Sweep time button step size is too small for slow sweep times,
+  could increase by a minimum fraction of current sweep time. 
+"""
 
 """ Controller """
 
